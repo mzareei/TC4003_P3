@@ -1,5 +1,10 @@
 package mapreduce
 
+import (
+	"fmt"
+	"math/rand"
+)
+
 // schedule starts and waits for all tasks in the given phase (Map or Reduce).
 func (mr *Master) schedule(phase jobPhase) {
 	var ntasks int
@@ -22,5 +27,26 @@ func (mr *Master) schedule(phase jobPhase) {
 	//
 	// TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO TODO
 	//
+	<-mr.registerChannel
+	rand.Seed(86)
+	for task := 0; task < ntasks; {
+		wkName := mr.workers[rand.Intn(len(mr.workers))]
+
+		doTaskArgs := DoTaskArgs{
+			JobName:       mr.jobName,
+			File:          mr.files[task],
+			Phase:         phase,
+			TaskNumber:    task,
+			NumOtherPhase: nios,
+		}
+
+		ok := call(wkName, "Worker.DoTask", doTaskArgs, new(struct{}))
+		if !ok {
+			fmt.Printf("Schedule: RPC call to Worker.DoTask failed")
+		} else {
+			task++
+		}
+	}
+
 	debug("Schedule: %v phase done\n", phase)
 }
