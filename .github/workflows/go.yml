@@ -25,10 +25,14 @@ jobs:
         go mod tidy
         go test
     
-    - name: Test Assignment 1-2
+    - name: Test Assignment 1-2 (1)
       run: | 
         cd assignment1-2/src/mapreduce
         go mod init mapreduce
         go mod tidy
         go test -v -run Sequential
+    
+    - name: Test Assignment 1-2 (2)
+      run: | 
+        cd assignment1-2/src/main
         sh ./test-wc.sh
