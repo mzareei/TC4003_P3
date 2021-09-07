@@ -34,5 +34,6 @@ jobs:
     
     - name: Test Assignment 1-2 (2)
       run: | 
+        ln -s $GOROOT/mapreduce $PWD/assignment1-2/src/mapreduce
         cd assignment1-2/src/main
         sh ./test-wc.sh
