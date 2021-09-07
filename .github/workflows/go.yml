@@ -38,16 +38,16 @@ jobs:
         cd assignment1-2/src/main
         sh ./test-wc.sh
     
-    - name: Test Assignment 1-3 (1)
+    - name: Test Assignment 1-3 (1 & 2)
       run: | 
         cd assignment1-3/src/mapreduce
         go mod init mapreduce
         go mod tidy
         sudo go test -v -run TestBasic
-    
-    - name: Test Assignment 1-3 (2)
-      run: | 
-        cd assignment1-3/src/mapreduce
-        go mod init mapreduce
-        go mod tidy
         sudo go test -v -run Failure
+    
+    - name: Test Assignment 1-2 (3)
+      run: | 
+        ln -s $PWD/assignment1-3/src/mapreduce $GOROOT/src/mapreduce 
+        cd assignment1-3/src/main
+        sh ./test-ii.sh
