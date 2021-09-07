@@ -27,7 +27,7 @@ jobs:
     
     - name: Test Assignment 1-2
       run: | 
-        cd ../assignment1-2
+        cd assignment1-2
         export GOPATH="$PWD"
         cd src
         go test -v -run Sequential
