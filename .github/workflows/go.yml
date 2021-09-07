@@ -3,9 +3,7 @@ name: Go
 on:
   pull_request:
     branches: [ master ]
-  push: 
-    branches: [ assignment1-workflow ]
-
+    
 jobs:
 
   build:
@@ -46,7 +44,7 @@ jobs:
         sudo go test -v -run TestBasic
         sudo go test -v -run Failure
     
-    - name: Test Assignment 1-2 (3 )
+    - name: Test Assignment 1-2 (3)
       run: | 
         ln -s $PWD/assignment1-3/src/mapreduce $GOROOT/src/mapreduce 
         cd assignment1-3/src/main
