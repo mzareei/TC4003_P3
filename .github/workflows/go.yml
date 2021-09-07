@@ -19,4 +19,4 @@ jobs:
         go-version: 1.17
         
     - name: Test Assignment 1-1
-      run: cd assignment1-1 | export GO111MODULE=auto | go test
+      run: cd assignment1-1 | go mod init | go test
