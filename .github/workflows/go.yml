@@ -43,4 +43,4 @@ jobs:
         cd assignment1-3/src/mapreduce
         go mod init mapreduce
         go mod tidy
-        go test -v -run TestBasic
+        sudo go test -v -run TestBasic
