@@ -23,7 +23,7 @@ jobs:
         cd assignment1-1
         go mod init cos418_hw1_1
         go mod tidy
-        go test
+        go test -v
     
     - name: Test Assignment 1-2 (1)
       run: | 
@@ -34,6 +34,6 @@ jobs:
     
     - name: Test Assignment 1-2 (2)
       run: | 
-        ln -s $GOROOT/src/mapreduce $PWD/assignment1-2/src/mapreduce
+        ln -s $PWD/assignment1-2/src/mapreduce $GOROOT/src/mapreduce 
         cd assignment1-2/src/main
         sh ./test-wc.sh
