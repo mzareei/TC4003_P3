@@ -27,7 +27,7 @@ jobs:
     
     - name: Test Assignment 1-2
       run: | 
-        cd assignment1-2
-        export GOPATH="$PWD"
-        cd src
+        cd assignment1-2/src/mapreduce
+        go mod init mapreduce
+        go mod tidy
         go test -v -run Sequential
