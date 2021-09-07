@@ -31,3 +31,4 @@ jobs:
         go mod init mapreduce
         go mod tidy
         go test -v -run Sequential
+        sh ./test-wc.sh
