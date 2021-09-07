@@ -44,4 +44,3 @@ jobs:
         go mod init mapreduce
         go mod tidy
         go test -v -run TestBasic
-        go test -v -run Failure
