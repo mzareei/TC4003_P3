@@ -1,8 +1,12 @@
 package cos418_hw1_1
 
 import (
+	"bufio"
 	"fmt"
+	"os"
+	"regexp"
 	"sort"
+	"strings"
 )
 
 // Find the top K most common words in a text document.
@@ -15,10 +19,33 @@ import (
 // are removed, e.g. "don't" becomes "dont".
 // You should use `checkError` to handle potential errors.
 func topWords(path string, numWords int, charThreshold int) []WordCount {
-	// TODO: implement me
-	// HINT: You may find the `strings.Fields` and `strings.ToLower` functions helpful
-	// HINT: To keep only alphanumeric characters, use the regex "[^0-9a-zA-Z]+"
-	return nil
+	file, err := os.Open(path)
+	checkError(err)
+
+	re, err := regexp.Compile(`[^\w]`)
+	checkError(err)
+
+	scanner := bufio.NewScanner(file)
+	scanner.Split(bufio.ScanLines)
+
+	wordsMap := map[string]int{}
+	for scanner.Scan() {
+		for _, almostWord := range strings.Fields(scanner.Text()) {
+			word := strings.ToLower(re.ReplaceAllString(almostWord, ""))
+			if len(word) >= charThreshold {
+				wordsMap[word]++
+			}
+		}
+	}
+	file.Close()
+
+	wordsCounts := []WordCount{}
+	for word, count := range wordsMap {
+		wordsCounts = append(wordsCounts, WordCount{word, count})
+	}
+	sortWordCounts(wordsCounts)
+
+	return wordsCounts[:numWords]
 }
 
 // A struct that represents how many times a word is observed in a document

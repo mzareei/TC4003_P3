@@ -2,15 +2,14 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"mapreduce"
 	"os"
 	"regexp"
-	"strconv"
+	"sort"
 	"strings"
 )
 
-var wordRe = regexp.MustCompile(`[A-Za-z0-9]+`)
+var wordRe = regexp.MustCompile(`[A-Za-z]+`)
 
 // The mapping function is called once for each piece of the input.
 // In this framework, the key is the name of the file that is being processed,
@@ -19,8 +18,21 @@ var wordRe = regexp.MustCompile(`[A-Za-z0-9]+`)
 func mapF(document string, value string) (res []mapreduce.KeyValue) {
 	for _, line := range strings.Split(value, "\n") {
 		for _, word := range wordRe.FindAllString(line, -1) {
-			res = append(res, mapreduce.KeyValue{word, "1"})
+			res = append(res, mapreduce.KeyValue{word, document})
 		}
+	}
+	return
+}
+
+func stringSet(stringSlice []string) (stringSet []string) {
+	stringMap := make(map[string]bool)
+	for _, str := range stringSlice {
+		if !stringMap[str] {
+			stringMap[str] = true
+		}
+	}
+	for str := range stringMap {
+		stringSet = append(stringSet, str)
 	}
 	return
 }
@@ -29,15 +41,9 @@ func mapF(document string, value string) (res []mapreduce.KeyValue) {
 // list of that key's string value (merged across all inputs). The return value
 // should be a single output value for that key.
 func reduceF(key string, values []string) string {
-	reduced := 0
-	for _, v := range values {
-		if i, err := strconv.Atoi(v); err == nil {
-			reduced += i
-		} else {
-			log.Fatal(err)
-		}
-	}
-	return strconv.Itoa(reduced)
+	documentSet := stringSet(values)
+	sort.Strings(documentSet)
+	return fmt.Sprintf("%d %s", len(documentSet), strings.Join(documentSet, ","))
 }
 
 // Can be run in 3 ways:
@@ -50,9 +56,9 @@ func main() {
 	} else if os.Args[1] == "master" {
 		var mr *mapreduce.Master
 		if os.Args[2] == "sequential" {
-			mr = mapreduce.Sequential("wcseq", os.Args[3:], 3, mapF, reduceF)
+			mr = mapreduce.Sequential("iiseq", os.Args[3:], 3, mapF, reduceF)
 		} else {
-			mr = mapreduce.Distributed("wcseq", os.Args[3:], 3, os.Args[2])
+			mr = mapreduce.Distributed("iiseq", os.Args[3:], 3, os.Args[2])
 		}
 		mr.Wait()
 	} else {
