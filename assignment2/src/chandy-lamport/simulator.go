@@ -42,7 +42,7 @@ func NewSimulator() *Simulator {
 // Note: since we only deliver one message to a given server at each time step,
 // the message may be received *after* the time step returned in this function.
 func (sim *Simulator) GetReceiveTime() int {
-	return sim.time + 1 + rand.Intn(5)
+	return sim.time + 1 + rand.Intn(maxDelay)
 }
 
 // Add a server to this simulator with the specified number of starting tokens
@@ -141,9 +141,11 @@ func (sim *Simulator) CollectSnapshot(snapshotId int) *SnapshotState {
 	}
 	snapshotMessages := []*SnapshotMessage{}
 	for _, sv := range sim.servers {
-		if ss, ok := sv.snapshots[snapshotId]; ok {
-			tokens[sv.Id] = ss.GetState()
-			snapshotMessages = append(snapshotMessages, ss.Messages...)
+		if ss, ok := sv.statesRecordings[snapshotId]; ok {
+			tokens[sv.Id] = ss.InitialState
+			for _, cs := range ss.ChannelsStates {
+				snapshotMessages = append(snapshotMessages, cs.messages...)
+			}
 		}
 	}
 	snap := SnapshotState{snapshotId, tokens, snapshotMessages}
