@@ -4,6 +4,7 @@ type StateRecording struct {
 	ChannelsStates     map[string]*ChannelState
 	InitialState       int
 	RecordingCompleted bool
+	recordingChannels  int
 }
 
 type ChannelState struct {
@@ -24,22 +25,14 @@ func MarkerReceivingRule(
 			channelsStates,
 			initialState,
 			false,
+			len(incomingChannels)-1,
 		}
 	} else {
 		stateRecording.ChannelsStates[incomingChannel].recording = false
+		stateRecording.recordingChannels--
 	}
-	stateRecording.probablyStopStateRecording()
+	stateRecording.RecordingCompleted = stateRecording.recordingChannels == 0
 	return stateRecording
-}
-
-func (sr *StateRecording) probablyStopStateRecording() {
-	channelsRecording := len(sr.ChannelsStates)
-	for _, cs := range sr.ChannelsStates {
-		if !cs.recording {
-			channelsRecording--
-		}
-	}
-	sr.RecordingCompleted = channelsRecording == 0
 }
 
 func MarkerSendingRule(initialState int, incomingChannels map[string]*Link) *StateRecording {
@@ -52,6 +45,7 @@ func MarkerSendingRule(initialState int, incomingChannels map[string]*Link) *Sta
 		channelsStates,
 		initialState,
 		false,
+		len(incomingChannels),
 	}
 }
 
