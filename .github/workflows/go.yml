@@ -49,3 +49,10 @@ jobs:
         ln -s $PWD/assignment1-3/src/mapreduce $GOROOT/src/mapreduce 
         cd assignment1-3/src/main
         sh ./test-ii.sh
+
+    - name: Test Assignment 2
+      run: | 
+        cd assignment2/src/chandy-lamport
+        go mod init chandy_lamport
+        go mod tidy
+        go test
