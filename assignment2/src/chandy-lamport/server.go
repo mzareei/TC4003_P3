@@ -8,12 +8,12 @@ import "log"
 // Marker messages represent the progress of the snapshot process. The bulk of
 // the distributed protocol is implemented in `HandlePacket` and `StartSnapshot`.
 type Server struct {
-	Id            string
-	Tokens        int
-	sim           *Simulator
-	outboundLinks map[string]*Link // key = link.dest
-	inboundLinks  map[string]*Link // key = link.src
-	// TODO: ADD MORE FIELDS HERE
+	Id               string
+	Tokens           int
+	sim              *Simulator
+	outboundLinks    map[string]*Link // key = link.dest
+	inboundLinks     map[string]*Link // key = link.src
+	statesRecordings map[int]*StateRecording
 }
 
 // A unidirectional communication channel between two servers
@@ -31,6 +31,7 @@ func NewServer(id string, tokens int, sim *Simulator) *Server {
 		sim,
 		make(map[string]*Link),
 		make(map[string]*Link),
+		make(map[int]*StateRecording),
 	}
 }
 
@@ -84,11 +85,33 @@ func (server *Server) SendTokens(numTokens int, dest string) {
 // When the snapshot algorithm completes on this server, this function
 // should notify the simulator by calling `sim.NotifySnapshotComplete`.
 func (server *Server) HandlePacket(src string, message interface{}) {
-	// TODO: IMPLEMENT ME
+	switch message := message.(type) {
+	case TokenMessage:
+		server.Tokens += message.numTokens
+		for _, sr := range server.statesRecordings {
+			if !sr.RecordingCompleted {
+				sr.RecordChannelMessage(src, server.Id, message)
+			}
+		}
+	case MarkerMessage:
+		stateRecording := server.statesRecordings[message.snapshotId]
+		if stateRecording == nil {
+			server.statesRecordings[message.snapshotId] = MarkerReceivingRule(nil, src, server.Tokens, server.inboundLinks)
+			server.SendToNeighbors(message)
+		} else {
+			MarkerReceivingRule(stateRecording, src, server.Tokens, nil)
+		}
+		if server.statesRecordings[message.snapshotId].RecordingCompleted {
+			server.sim.NotifySnapshotComplete(server.Id, message.snapshotId)
+		}
+	default:
+		log.Fatal("Error unknown message type: ", message)
+	}
 }
 
 // Start the chandy-lamport snapshot algorithm on this server.
 // This should be called only once per server.
 func (server *Server) StartSnapshot(snapshotId int) {
-	// TODO: IMPLEMENT ME
+	server.statesRecordings[snapshotId] = MarkerSendingRule(server.Tokens, server.inboundLinks)
+	server.SendToNeighbors(MarkerMessage{snapshotId})
 }
