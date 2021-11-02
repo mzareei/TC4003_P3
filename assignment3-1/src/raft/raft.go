@@ -17,8 +17,13 @@ package raft
 //   in the same server.
 //
 
-import "sync"
-import "labrpc"
+import (
+	"fmt"
+	"labrpc"
+	"math/rand"
+	"sync"
+	"time"
+)
 
 // import "bytes"
 // import "encoding/gob"
@@ -37,15 +42,28 @@ type ApplyMsg struct {
 	Snapshot    []byte // ignore for lab2; only used in lab3
 }
 
+type state int
+
+const (
+	follower state = iota
+	candidate
+	leader
+)
+
 //
 // A Go object implementing a single Raft peer.
 //
 type Raft struct {
-	mu        sync.Mutex
-	peers     []*labrpc.ClientEnd
-	persister *Persister
-	me        int // index into peers[]
-
+	mu                sync.Mutex
+	peers             []*labrpc.ClientEnd
+	persister         *Persister
+	me                int // index into peers[]
+	currentTerm       int
+	transitionToState chan state
+	currentState      state
+	timeoutTimer      *time.Timer
+	votedFor          int
+	heartbeatTicker   *time.Ticker
 	// Your data here.
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
@@ -55,11 +73,7 @@ type Raft struct {
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-
-	var term int
-	var isleader bool
-	// Your code here.
-	return term, isleader
+	return rf.currentTerm, rf.currentState == leader
 }
 
 //
@@ -97,21 +111,36 @@ func (rf *Raft) readPersist(data []byte) {
 // example RequestVote RPC arguments structure.
 //
 type RequestVoteArgs struct {
-	// Your data here.
+	Term        int
+	CandidateId int
 }
 
 //
 // example RequestVote RPC reply structure.
 //
 type RequestVoteReply struct {
-	// Your data here.
+	Term        int
+	VoteGranted bool
 }
 
 //
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
-	// Your code here.
+	fmt.Printf("Server %d received request vote of term %d from %d.\n", rf.me, args.Term, args.CandidateId)
+	reply.Term = rf.currentTerm
+	if args.Term == rf.currentTerm {
+		if rf.currentState == leader {
+			reply.VoteGranted = false
+		}
+	} else if args.Term > rf.currentTerm {
+		if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
+			rf.votedFor = args.CandidateId
+			reply.VoteGranted = true
+		}
+	} else {
+		reply.VoteGranted = false
+	}
 }
 
 //
@@ -136,6 +165,44 @@ func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *Request
 	return ok
 }
 
+type AppendEntriesArgs struct {
+	Term     int
+	Entries  map[int]int
+}
+
+type AppendEntriesReply struct {
+	Term    int
+}
+
+func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) {
+	reply.Term = rf.currentTerm
+	if args.Entries == nil {
+		rf.heartbeatReceived(args.Term)
+	}
+}
+
+func (rf *Raft) heartbeatReceived(heartbeatTerm int) {
+	fmt.Printf("Server %d received heartbeat of term %d.\n", rf.me, heartbeatTerm)
+	if (heartbeatTerm > rf.currentTerm) {
+		rf.currentTerm = heartbeatTerm
+		rf.transitionToState <- follower
+	} else if (heartbeatTerm == rf.currentTerm) {
+		switch rf.currentState {
+		case follower:
+			rf.setOrResetElectionTimeoutTimer()
+		case candidate:
+			if (heartbeatTerm == rf.currentTerm) {
+				rf.transitionToState <- follower
+			}
+		}
+	}
+	
+}
+
+func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	return ok
+}
 
 //
 // the service using Raft (e.g. a k/v server) wants to start
@@ -154,8 +221,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := -1
 	isLeader := true
-
-
+	
+	
 	return index, term, isLeader
 }
 
@@ -186,12 +253,107 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
+	rf.transitionToState = make(chan state)
 
 	// Your initialization code here.
+	go rf.handleStateTransition()
+	rf.transitionToState <- follower
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
-
 	return rf
+}
+
+func (rf *Raft) handleStateTransition() {
+	for state := range rf.transitionToState {
+		switch state {
+		case follower:
+			if rf.currentState == leader {
+				rf.heartbeatTicker.Stop()
+			}
+			rf.currentState = follower
+			fmt.Printf("Server %d is follower.\n", rf.me)
+			rf.setOrResetElectionTimeoutTimer()
+		case candidate:
+			rf.currentState = candidate
+			rf.votedFor = -1
+			fmt.Printf("Server %d is candidate.\n", rf.me)
+			rf.currentTerm++
+			go rf.sendRequestVoteToPeers()
+			rf.setOrResetElectionTimeoutTimer()
+		case leader:
+			fmt.Printf("Server %d is leader for term %d.\n", rf.me, rf.currentTerm)
+			rf.currentState = leader
+			rf.setOrResetHeartbeatTicker()
+		}
+	}
+}
+
+func (rf *Raft) sendRequestVoteToPeers() {
+	votes := 1 // vote for itself
+	var majority int = len(rf.peers)/2 + 1
+	for peer := range rf.peers {
+		if peer != rf.me {
+			fmt.Printf("Server %d sending RequestVote to %d\n", rf.me, peer)
+			reply := RequestVoteReply{}
+			rf.sendRequestVote(
+				peer,
+				RequestVoteArgs{
+					rf.currentTerm,
+					rf.me,
+				},
+				&reply,
+			)
+			if reply.VoteGranted {
+				votes++
+				if votes >= majority {
+					rf.transitionToState <- leader	// win the election
+					break
+				}
+			} else {
+				if reply.Term > rf.currentTerm {
+					rf.currentTerm = reply.Term
+					rf.transitionToState <- follower
+					break
+				}
+			}
+		}
+	}
+}
+
+func (rf *Raft) setOrResetElectionTimeoutTimer() {
+	d := time.Duration(rand.Intn(150)+150) * time.Millisecond
+	if rf.timeoutTimer == nil {
+		rf.timeoutTimer = time.AfterFunc(d, func() {
+			fmt.Printf("Server %d timed out! Becoming candidate.\n", rf.me)
+			rf.transitionToState <- candidate
+		})
+	} else {
+		rf.timeoutTimer.Reset(d)
+	}
+}
+
+func (rf *Raft) setOrResetHeartbeatTicker() {
+	d := time.Duration(rand.Intn(10)+1) * time.Millisecond
+	if rf.heartbeatTicker == nil {
+		rf.heartbeatTicker = time.NewTicker(d)
+		go func() {
+			for range rf.heartbeatTicker.C {
+				for p := range rf.peers {
+					reply := AppendEntriesReply{}
+					rf.sendAppendEntries(
+						p,
+						AppendEntriesArgs{
+							rf.currentTerm,
+							nil,
+						},
+						&reply,
+					)
+				}
+			}
+		}()
+	} else {
+		rf.heartbeatTicker.Reset(d)
+	}
 }
