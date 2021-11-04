@@ -18,7 +18,6 @@ package raft
 //
 
 import (
-	"fmt"
 	"labrpc"
 	"math/rand"
 	"sync"
@@ -61,13 +60,41 @@ type Raft struct {
 	currentTerm       int
 	transitionToState chan state
 	currentState      state
-	timeoutTimer      *time.Timer
 	votedFor          int
-	heartbeatTicker   *time.Ticker
+	timeoutTimer      *timeoutTimer
+	heartbeatTicker   *heartbeatTicker
 	// Your data here.
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
 
+}
+
+type heartbeatTicker struct {
+	ticker   *time.Ticker
+	duration time.Duration
+}
+
+func (ht *heartbeatTicker) reset (){
+	ht.ticker.Stop()
+	ht.ticker.Reset(ht.duration)
+}
+
+func (ht *heartbeatTicker) stop (){
+	ht.ticker.Stop()
+}
+
+type timeoutTimer struct {
+	timer    *time.Timer
+	duration time.Duration
+}
+
+func (tt *timeoutTimer) reset (){
+	tt.timer.Stop()
+	tt.timer.Reset(tt.duration)
+}
+
+func (tt *timeoutTimer) stop (){
+	tt.timer.Stop()
 }
 
 // return currentTerm and whether this server
@@ -127,19 +154,14 @@ type RequestVoteReply struct {
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
-	fmt.Printf("Server %d received request vote of term %d from %d.\n", rf.me, args.Term, args.CandidateId)
+	DPrintf("Server %d received request vote of term %d from %d.\n", rf.me, args.Term, args.CandidateId)
 	reply.Term = rf.currentTerm
-	if args.Term == rf.currentTerm {
-		if rf.currentState == leader {
-			reply.VoteGranted = false
-		}
-	} else if args.Term > rf.currentTerm {
+	reply.VoteGranted = false
+	if args.Term > rf.currentTerm {
 		if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
 			rf.votedFor = args.CandidateId
 			reply.VoteGranted = true
 		}
-	} else {
-		reply.VoteGranted = false
 	}
 }
 
@@ -166,12 +188,12 @@ func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *Request
 }
 
 type AppendEntriesArgs struct {
-	Term     int
-	Entries  map[int]int
+	Term    int
+	Entries map[int]int
 }
 
 type AppendEntriesReply struct {
-	Term    int
+	Term int
 }
 
 func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) {
@@ -182,21 +204,14 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 }
 
 func (rf *Raft) heartbeatReceived(heartbeatTerm int) {
-	fmt.Printf("Server %d received heartbeat of term %d.\n", rf.me, heartbeatTerm)
-	if (heartbeatTerm > rf.currentTerm) {
+	DPrintf("Server %d received heartbeat of term %d.\n", rf.me, heartbeatTerm)
+	if heartbeatTerm > rf.currentTerm {
 		rf.currentTerm = heartbeatTerm
 		rf.transitionToState <- follower
-	} else if (heartbeatTerm == rf.currentTerm) {
-		switch rf.currentState {
-		case follower:
-			rf.setOrResetElectionTimeoutTimer()
-		case candidate:
-			if (heartbeatTerm == rf.currentTerm) {
-				rf.transitionToState <- follower
-			}
-		}
+	} else {
+		rf.timeoutTimer.reset()
 	}
-	
+
 }
 
 func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -221,8 +236,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := -1
 	isLeader := true
-	
-	
+
 	return index, term, isLeader
 }
 
@@ -233,7 +247,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // turn off debug output from this instance.
 //
 func (rf *Raft) Kill() {
-	// Your code here, if desired.
+	rf.heartbeatTicker.stop()
+	rf.timeoutTimer.stop()
+	close(rf.transitionToState)
 }
 
 //
@@ -255,7 +271,25 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 	rf.transitionToState = make(chan state)
 
-	// Your initialization code here.
+	d := time.Duration(rand.Intn(150)+150) * time.Millisecond
+	timer := time.AfterFunc(d, func() {
+		DPrintf("Server %d timed out! Becoming candidate.\n", rf.me)
+		rf.transitionToState <- candidate
+	})
+	timer.Stop()
+	rf.timeoutTimer = &timeoutTimer{
+		timer: timer,
+		duration: d,
+	}
+
+	d = time.Duration(rand.Intn(10)+1) * time.Millisecond
+	ticker := time.NewTicker(d)
+	ticker.Stop()
+	rf.heartbeatTicker = &heartbeatTicker{
+		ticker: ticker,
+		duration: d,
+	}
+
 	go rf.handleStateTransition()
 	rf.transitionToState <- follower
 
@@ -270,22 +304,23 @@ func (rf *Raft) handleStateTransition() {
 		switch state {
 		case follower:
 			if rf.currentState == leader {
-				rf.heartbeatTicker.Stop()
+				rf.heartbeatTicker.stop()
 			}
 			rf.currentState = follower
-			fmt.Printf("Server %d is follower.\n", rf.me)
-			rf.setOrResetElectionTimeoutTimer()
+			rf.votedFor = -1
+			rf.timeoutTimer.reset()
+			DPrintf("Server %d is follower.\n", rf.me)
 		case candidate:
 			rf.currentState = candidate
-			rf.votedFor = -1
-			fmt.Printf("Server %d is candidate.\n", rf.me)
 			rf.currentTerm++
+			rf.timeoutTimer.reset()
 			go rf.sendRequestVoteToPeers()
-			rf.setOrResetElectionTimeoutTimer()
+			DPrintf("Server %d is candidate.\n", rf.me)
 		case leader:
-			fmt.Printf("Server %d is leader for term %d.\n", rf.me, rf.currentTerm)
 			rf.currentState = leader
-			rf.setOrResetHeartbeatTicker()
+			rf.timeoutTimer.stop()
+			go rf.sendHeartbeats()
+			DPrintf("Server %d is leader for term %d.\n", rf.me, rf.currentTerm)
 		}
 	}
 }
@@ -295,7 +330,7 @@ func (rf *Raft) sendRequestVoteToPeers() {
 	var majority int = len(rf.peers)/2 + 1
 	for peer := range rf.peers {
 		if peer != rf.me {
-			fmt.Printf("Server %d sending RequestVote to %d\n", rf.me, peer)
+			DPrintf("Server %d sending RequestVote to %d\n", rf.me, peer)
 			reply := RequestVoteReply{}
 			rf.sendRequestVote(
 				peer,
@@ -307,8 +342,9 @@ func (rf *Raft) sendRequestVoteToPeers() {
 			)
 			if reply.VoteGranted {
 				votes++
+				DPrintf("Server %d has %d votes (needs >= %d).\n", rf.me, votes, majority)
 				if votes >= majority {
-					rf.transitionToState <- leader	// win the election
+					rf.transitionToState <- leader // win the election
 					break
 				}
 			} else {
@@ -322,38 +358,23 @@ func (rf *Raft) sendRequestVoteToPeers() {
 	}
 }
 
-func (rf *Raft) setOrResetElectionTimeoutTimer() {
-	d := time.Duration(rand.Intn(150)+150) * time.Millisecond
-	if rf.timeoutTimer == nil {
-		rf.timeoutTimer = time.AfterFunc(d, func() {
-			fmt.Printf("Server %d timed out! Becoming candidate.\n", rf.me)
-			rf.transitionToState <- candidate
-		})
-	} else {
-		rf.timeoutTimer.Reset(d)
-	}
-}
-
-func (rf *Raft) setOrResetHeartbeatTicker() {
-	d := time.Duration(rand.Intn(10)+1) * time.Millisecond
-	if rf.heartbeatTicker == nil {
-		rf.heartbeatTicker = time.NewTicker(d)
-		go func() {
-			for range rf.heartbeatTicker.C {
-				for p := range rf.peers {
-					reply := AppendEntriesReply{}
-					rf.sendAppendEntries(
-						p,
-						AppendEntriesArgs{
-							rf.currentTerm,
-							nil,
-						},
-						&reply,
-					)
-				}
+func (rf *Raft) sendHeartbeats() {
+	rf.heartbeatTicker.reset()
+	for range rf.heartbeatTicker.ticker.C {
+		for p := range rf.peers {
+			reply := AppendEntriesReply{}
+			rf.sendAppendEntries(
+				p,
+				AppendEntriesArgs{
+					rf.currentTerm,
+					nil,
+				},
+				&reply,
+			)
+			if reply.Term > rf.currentTerm {
+				rf.transitionToState <- follower
+				break
 			}
-		}()
-	} else {
-		rf.heartbeatTicker.Reset(d)
+		}
 	}
 }
