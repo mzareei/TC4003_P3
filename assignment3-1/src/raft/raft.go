@@ -74,12 +74,12 @@ type heartbeatTicker struct {
 	duration time.Duration
 }
 
-func (ht *heartbeatTicker) reset (){
+func (ht *heartbeatTicker) reset() {
 	ht.ticker.Stop()
 	ht.ticker.Reset(ht.duration)
 }
 
-func (ht *heartbeatTicker) stop (){
+func (ht *heartbeatTicker) stop() {
 	ht.ticker.Stop()
 }
 
@@ -88,12 +88,12 @@ type timeoutTimer struct {
 	duration time.Duration
 }
 
-func (tt *timeoutTimer) reset (){
+func (tt *timeoutTimer) reset() {
 	tt.timer.Stop()
 	tt.timer.Reset(tt.duration)
 }
 
-func (tt *timeoutTimer) stop (){
+func (tt *timeoutTimer) stop() {
 	tt.timer.Stop()
 }
 
@@ -204,7 +204,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 }
 
 func (rf *Raft) heartbeatReceived(heartbeatTerm int) {
-	DPrintf("Server %d received heartbeat of term %d.\n", rf.me, heartbeatTerm)
+	DPrintf("Server %d received heartbeat of term %d. Current term %d.\n", rf.me, heartbeatTerm, rf.currentTerm)
 	if heartbeatTerm > rf.currentTerm {
 		rf.currentTerm = heartbeatTerm
 		rf.transitionToState <- follower
@@ -278,7 +278,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	})
 	timer.Stop()
 	rf.timeoutTimer = &timeoutTimer{
-		timer: timer,
+		timer:    timer,
 		duration: d,
 	}
 
@@ -286,7 +286,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	ticker := time.NewTicker(d)
 	ticker.Stop()
 	rf.heartbeatTicker = &heartbeatTicker{
-		ticker: ticker,
+		ticker:   ticker,
 		duration: d,
 	}
 
@@ -362,18 +362,21 @@ func (rf *Raft) sendHeartbeats() {
 	rf.heartbeatTicker.reset()
 	for range rf.heartbeatTicker.ticker.C {
 		for p := range rf.peers {
-			reply := AppendEntriesReply{}
-			rf.sendAppendEntries(
-				p,
-				AppendEntriesArgs{
-					rf.currentTerm,
-					nil,
-				},
-				&reply,
-			)
-			if reply.Term > rf.currentTerm {
-				rf.transitionToState <- follower
-				break
+			if p != rf.me {
+				reply := AppendEntriesReply{}
+				rf.sendAppendEntries(
+					p,
+					AppendEntriesArgs{
+						rf.currentTerm,
+						nil,
+					},
+					&reply,
+				)
+				if reply.Term > rf.currentTerm {
+					rf.currentTerm = reply.Term
+					rf.transitionToState <- follower
+					break
+				}
 			}
 		}
 	}
