@@ -59,7 +59,7 @@ jobs:
 
     - name: Test Assignment 3-1 (elections)
       run: | 
-        cd assignment3-1
+        cd assignment3-1/src
         go mod init main
         go mod tidy
         go test -run InitialElection
