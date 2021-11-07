@@ -18,6 +18,7 @@ package raft
 //
 
 import (
+	"fmt"
 	"labrpc"
 	"math/rand"
 	"sync"
@@ -26,8 +27,6 @@ import (
 
 // import "bytes"
 // import "encoding/gob"
-
-
 
 //
 // as each Raft peer becomes aware that successive log entries are
@@ -53,7 +52,7 @@ const (
 // A Go object implementing a single Raft peer.
 //
 type Raft struct {
-	mu                sync.Mutex
+	sync.Mutex
 	peers             []*labrpc.ClientEnd
 	persister         *Persister
 	me                int // index into peers[]
@@ -70,13 +69,21 @@ type Raft struct {
 }
 
 type heartbeatTicker struct {
-	ticker   *time.Ticker
-	duration time.Duration
+	ticker *time.Ticker
+}
+
+func newHeartbeatTicker() *heartbeatTicker {
+	d := time.Duration(rand.Intn(10)+1) * time.Millisecond
+	ticker := time.NewTicker(d)
+	ticker.Stop()
+	return &heartbeatTicker{
+		ticker: ticker,
+	}
 }
 
 func (ht *heartbeatTicker) reset() {
-	ht.ticker.Stop()
-	ht.ticker.Reset(ht.duration)
+	d := time.Duration(rand.Intn(10)+1) * time.Millisecond
+	ht.ticker.Reset(d)
 }
 
 func (ht *heartbeatTicker) stop() {
@@ -84,17 +91,27 @@ func (ht *heartbeatTicker) stop() {
 }
 
 type timeoutTimer struct {
-	timer    *time.Timer
-	duration time.Duration
+	timer   *time.Timer
+	stopped chan struct{}
+}
+
+func newTimeoutTimer() *timeoutTimer {
+	d := time.Duration(rand.Intn(150)+150) * time.Millisecond
+	timer := time.NewTimer(d)
+	timer.Stop()
+	return &timeoutTimer{
+		timer: timer,
+		stopped: make(chan struct{}),
+	}
 }
 
 func (tt *timeoutTimer) reset() {
-	tt.timer.Stop()
-	tt.timer.Reset(tt.duration)
+	d := time.Duration(rand.Intn(150)+150) * time.Millisecond
+	tt.timer.Reset(d)
 }
 
 func (tt *timeoutTimer) stop() {
-	tt.timer.Stop()
+	tt.stopped <- struct{}{}
 }
 
 // return currentTerm and whether this server
@@ -131,9 +148,6 @@ func (rf *Raft) readPersist(data []byte) {
 	// d.Decode(&rf.yyy)
 }
 
-
-
-
 //
 // example RequestVote RPC arguments structure.
 //
@@ -156,12 +170,17 @@ type RequestVoteReply struct {
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	DPrintf("Server %d received request vote of term %d from %d.\n", rf.me, args.Term, args.CandidateId)
 	reply.Term = rf.currentTerm
-	reply.VoteGranted = false
+
 	if args.Term > rf.currentTerm {
-		if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
-			rf.votedFor = args.CandidateId
-			reply.VoteGranted = true
-		}
+		rf.currentTerm = args.Term
+		rf.transitionToState <- follower
+	}
+
+	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
+		rf.votedFor = args.CandidateId
+		reply.VoteGranted = true
+	} else {
+		reply.VoteGranted = false
 	}
 }
 
@@ -211,7 +230,6 @@ func (rf *Raft) heartbeatReceived(heartbeatTerm int) {
 	} else {
 		rf.timeoutTimer.reset()
 	}
-
 }
 
 func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -247,9 +265,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // turn off debug output from this instance.
 //
 func (rf *Raft) Kill() {
-	rf.heartbeatTicker.stop()
-	rf.timeoutTimer.stop()
-	close(rf.transitionToState)
+
 }
 
 //
@@ -271,24 +287,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 	rf.transitionToState = make(chan state)
 
-	d := time.Duration(rand.Intn(150)+150) * time.Millisecond
-	timer := time.AfterFunc(d, func() {
-		DPrintf("Server %d timed out! Becoming candidate.\n", rf.me)
-		rf.transitionToState <- candidate
-	})
-	timer.Stop()
-	rf.timeoutTimer = &timeoutTimer{
-		timer:    timer,
-		duration: d,
-	}
+	rf.timeoutTimer = newTimeoutTimer()
+	go rf.timeoutTimerExpired()
 
-	d = time.Duration(rand.Intn(10)+1) * time.Millisecond
-	ticker := time.NewTicker(d)
-	ticker.Stop()
-	rf.heartbeatTicker = &heartbeatTicker{
-		ticker:   ticker,
-		duration: d,
-	}
+	rf.heartbeatTicker = newHeartbeatTicker()
+	go rf.sendHeartbeats()
 
 	go rf.handleStateTransition()
 	rf.transitionToState <- follower
@@ -319,8 +322,22 @@ func (rf *Raft) handleStateTransition() {
 		case leader:
 			rf.currentState = leader
 			rf.timeoutTimer.stop()
-			go rf.sendHeartbeats()
+			rf.heartbeatTicker.reset()
 			DPrintf("Server %d is leader for term %d.\n", rf.me, rf.currentTerm)
+		}
+	}
+}
+
+func (rf *Raft) timeoutTimerExpired() {
+	for {
+		select {
+		case <-rf.timeoutTimer.stopped:
+			DPrintf("Server %d timeout timer stopped.\n", rf.me)
+			rf.timeoutTimer.timer.Stop()
+			<-rf.timeoutTimer.timer.C
+		case <-rf.timeoutTimer.timer.C:
+			DPrintf("Server %d timed out! Becoming candidate.\n", rf.me)
+			rf.transitionToState <- candidate
 		}
 	}
 }
@@ -331,53 +348,92 @@ func (rf *Raft) sendRequestVoteToPeers() {
 	for peer := range rf.peers {
 		if peer != rf.me {
 			DPrintf("Server %d sending RequestVote to %d\n", rf.me, peer)
-			reply := RequestVoteReply{}
-			rf.sendRequestVote(
-				peer,
-				RequestVoteArgs{
-					rf.currentTerm,
-					rf.me,
-				},
-				&reply,
-			)
-			if reply.VoteGranted {
-				votes++
-				DPrintf("Server %d has %d votes (needs >= %d).\n", rf.me, votes, majority)
-				if votes >= majority {
-					rf.transitionToState <- leader // win the election
-					break
+			if reply, e := rf.sendRequestVoteWithTimeout(peer); e == nil {
+				if reply.VoteGranted {
+					votes++
+					DPrintf("Server %d has %d votes (needs >= %d).\n", rf.me, votes, majority)
+					if votes >= majority {
+						rf.transitionToState <- leader // win the election
+						break
+					}
+				} else {
+					if reply.Term > rf.currentTerm {
+						rf.currentTerm = reply.Term
+						rf.transitionToState <- follower
+						break
+					}
 				}
 			} else {
-				if reply.Term > rf.currentTerm {
-					rf.currentTerm = reply.Term
-					rf.transitionToState <- follower
-					break
-				}
+				DPrintf("Server %d error sending RequestVote to %d: %s.\n", rf.me, peer, e.Error())
 			}
 		}
 	}
 }
 
+func (rf *Raft) sendRequestVoteWithTimeout(peer int) (*RequestVoteReply, error) {
+	replyReceived := make(chan RequestVoteReply)
+
+	go func() {
+		reply := RequestVoteReply{}
+		rf.sendRequestVote(
+			peer,
+			RequestVoteArgs{
+				rf.currentTerm,
+				rf.me,
+			},
+			&reply,
+		)
+		replyReceived <- reply
+	}()
+
+	select {
+	case reply := <-replyReceived:
+		return &reply, nil
+	case <-time.After(5 * time.Millisecond):
+		return &RequestVoteReply{}, fmt.Errorf("request timed out")
+	}
+}
+
 func (rf *Raft) sendHeartbeats() {
-	rf.heartbeatTicker.reset()
 	for range rf.heartbeatTicker.ticker.C {
-		for p := range rf.peers {
-			if p != rf.me {
-				reply := AppendEntriesReply{}
-				rf.sendAppendEntries(
-					p,
-					AppendEntriesArgs{
-						rf.currentTerm,
-						nil,
-					},
-					&reply,
-				)
-				if reply.Term > rf.currentTerm {
-					rf.currentTerm = reply.Term
-					rf.transitionToState <- follower
-					break
+		for peer := range rf.peers {
+			if peer != rf.me {
+				DPrintf("Server %d sending heartbeat to %d.\n", rf.me, peer)
+				if reply, e := rf.sendHeartbeatWithTimeout(peer); e == nil {
+					if reply.Term > rf.currentTerm {
+						rf.currentTerm = reply.Term
+						rf.transitionToState <- follower
+						break
+					}
+				} else {
+					DPrintf("Server %d error sending heartbeat to %d: %s.\n", rf.me, peer, e.Error())
 				}
+
 			}
 		}
+	}
+}
+
+func (rf *Raft) sendHeartbeatWithTimeout(peer int) (*AppendEntriesReply, error) {
+	replyReceived := make(chan AppendEntriesReply)
+
+	go func() {
+		reply := AppendEntriesReply{}
+		rf.sendAppendEntries(
+			peer,
+			AppendEntriesArgs{
+				rf.currentTerm,
+				nil,
+			},
+			&reply,
+		)
+		replyReceived <- reply
+	}()
+
+	select {
+	case reply := <-replyReceived:
+		return &reply, nil
+	case <-time.After(10 * time.Millisecond):
+		return &AppendEntriesReply{}, fmt.Errorf("request timed out")
 	}
 }
