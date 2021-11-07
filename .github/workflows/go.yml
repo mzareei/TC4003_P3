@@ -62,5 +62,6 @@ jobs:
         cd assignment3-1/src
         go mod init main
         go mod tidy
+        cd raft
         go test -run InitialElection
         go test -run ReElection
