@@ -27,8 +27,6 @@ import (
 // import "bytes"
 // import "encoding/gob"
 
-
-
 //
 // as each Raft peer becomes aware that successive log entries are
 // committed, the peer should send an ApplyMsg to the service (or
@@ -53,7 +51,7 @@ const (
 // A Go object implementing a single Raft peer.
 //
 type Raft struct {
-	mu                sync.Mutex
+	sync.Mutex
 	peers             []*labrpc.ClientEnd
 	persister         *Persister
 	me                int // index into peers[]
@@ -131,9 +129,6 @@ func (rf *Raft) readPersist(data []byte) {
 	// d.Decode(&rf.yyy)
 }
 
-
-
-
 //
 // example RequestVote RPC arguments structure.
 //
@@ -156,12 +151,17 @@ type RequestVoteReply struct {
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	DPrintf("Server %d received request vote of term %d from %d.\n", rf.me, args.Term, args.CandidateId)
 	reply.Term = rf.currentTerm
-	reply.VoteGranted = false
+
 	if args.Term > rf.currentTerm {
-		if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
-			rf.votedFor = args.CandidateId
-			reply.VoteGranted = true
-		}
+		rf.currentTerm = args.Term
+		rf.transitionToState <- follower
+	}
+	
+	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
+		rf.votedFor = args.CandidateId
+		reply.VoteGranted = true
+	} else {
+		reply.VoteGranted = false
 	}
 }
 
@@ -206,12 +206,13 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 func (rf *Raft) heartbeatReceived(heartbeatTerm int) {
 	DPrintf("Server %d received heartbeat of term %d. Current term %d.\n", rf.me, heartbeatTerm, rf.currentTerm)
 	if heartbeatTerm > rf.currentTerm {
+		DPrintf("MOVING TO FOLLOWER!\n")
 		rf.currentTerm = heartbeatTerm
 		rf.transitionToState <- follower
 	} else {
+		DPrintf("RESETTING TIMER!\n")
 		rf.timeoutTimer.reset()
 	}
-
 }
 
 func (rf *Raft) sendAppendEntries(server int, args AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -247,9 +248,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // turn off debug output from this instance.
 //
 func (rf *Raft) Kill() {
-	rf.heartbeatTicker.stop()
-	rf.timeoutTimer.stop()
-	close(rf.transitionToState)
 }
 
 //
@@ -340,6 +338,11 @@ func (rf *Raft) sendRequestVoteToPeers() {
 				},
 				&reply,
 			)
+			rf.Lock()
+			if rf.currentState != candidate {
+				rf.Unlock()
+				break
+			}
 			if reply.VoteGranted {
 				votes++
 				DPrintf("Server %d has %d votes (needs >= %d).\n", rf.me, votes, majority)
@@ -354,6 +357,7 @@ func (rf *Raft) sendRequestVoteToPeers() {
 					break
 				}
 			}
+			rf.Unlock()
 		}
 	}
 }
