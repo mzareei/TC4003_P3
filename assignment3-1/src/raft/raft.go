@@ -19,7 +19,7 @@ package raft
 
 import (
 	"fmt"
-	"labrpc"
+	"main/labrpc"
 	"math/rand"
 	"sync"
 	"time"
@@ -48,9 +48,6 @@ const (
 	leader
 )
 
-//
-// A Go object implementing a single Raft peer.
-//
 type Raft struct {
 	sync.Mutex
 	peers             []*labrpc.ClientEnd
@@ -62,10 +59,6 @@ type Raft struct {
 	votedFor          int
 	timeoutTimer      *timeoutTimer
 	heartbeatTicker   *heartbeatTicker
-	// Your data here.
-	// Look at the paper's Figure 2 for a description of what
-	// state a Raft server must maintain.
-
 }
 
 type heartbeatTicker struct {
@@ -100,7 +93,7 @@ func newTimeoutTimer() *timeoutTimer {
 	timer := time.NewTimer(d)
 	timer.Stop()
 	return &timeoutTimer{
-		timer: timer,
+		timer:   timer,
 		stopped: make(chan struct{}),
 	}
 }
@@ -114,8 +107,6 @@ func (tt *timeoutTimer) stop() {
 	tt.stopped <- struct{}{}
 }
 
-// return currentTerm and whether this server
-// believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
 	return rf.currentTerm, rf.currentState == leader
 }
@@ -148,59 +139,34 @@ func (rf *Raft) readPersist(data []byte) {
 	// d.Decode(&rf.yyy)
 }
 
-//
-// example RequestVote RPC arguments structure.
-//
 type RequestVoteArgs struct {
 	Term        int
 	CandidateId int
 }
 
-//
-// example RequestVote RPC reply structure.
-//
 type RequestVoteReply struct {
 	Term        int
 	VoteGranted bool
 }
 
-//
-// example RequestVote RPC handler.
-//
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) {
 	DPrintf("Server %d received request vote of term %d from %d.\n", rf.me, args.Term, args.CandidateId)
 	reply.Term = rf.currentTerm
 
 	if args.Term > rf.currentTerm {
 		rf.currentTerm = args.Term
-		rf.transitionToState <- follower
-	}
-
-	if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
-		rf.votedFor = args.CandidateId
+		rf.transitionToFollower(args.CandidateId)
 		reply.VoteGranted = true
 	} else {
-		reply.VoteGranted = false
+		if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
+			rf.votedFor = args.CandidateId
+			reply.VoteGranted = true
+		} else {
+			reply.VoteGranted = false
+		}
 	}
 }
 
-//
-// example code to send a RequestVote RPC to a server.
-// server is the index of the target server in rf.peers[].
-// expects RPC arguments in args.
-// fills in *reply with RPC reply, so caller should
-// pass &reply.
-// the types of the args and reply passed to Call() must be
-// the same as the types of the arguments declared in the
-// handler function (including whether they are pointers).
-//
-// returns true if labrpc says the RPC was delivered.
-//
-// if you're having trouble getting RPC to work, check that you've
-// capitalized all field names in structs passed over RPC, and
-// that the caller passes the address of the reply struct with &, not
-// the struct itself.
-//
 func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	return ok
@@ -226,7 +192,7 @@ func (rf *Raft) heartbeatReceived(heartbeatTerm int) {
 	DPrintf("Server %d received heartbeat of term %d. Current term %d.\n", rf.me, heartbeatTerm, rf.currentTerm)
 	if heartbeatTerm > rf.currentTerm {
 		rf.currentTerm = heartbeatTerm
-		rf.transitionToState <- follower
+		rf.transitionToFollower(-1)
 	} else {
 		rf.timeoutTimer.reset()
 	}
@@ -268,17 +234,6 @@ func (rf *Raft) Kill() {
 
 }
 
-//
-// the service or tester wants to create a Raft server. the ports
-// of all the Raft servers (including this one) are in peers[]. this
-// server's port is peers[me]. all the servers' peers[] arrays
-// have the same order. persister is a place for this server to
-// save its persistent state, and also initially holds the most
-// recent saved state, if any. applyCh is a channel on which the
-// tester or service expects Raft to send ApplyMsg messages.
-// Make() must return quickly, so it should start goroutines
-// for any long-running work.
-//
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{}
@@ -294,12 +249,17 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go rf.sendHeartbeats()
 
 	go rf.handleStateTransition()
-	rf.transitionToState <- follower
+	rf.transitionToFollower(-1)
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
 	return rf
+}
+
+func (rf *Raft) transitionToFollower(votedFor int) {
+	rf.votedFor = votedFor
+	rf.transitionToState <- follower
 }
 
 func (rf *Raft) handleStateTransition() {
@@ -310,7 +270,6 @@ func (rf *Raft) handleStateTransition() {
 				rf.heartbeatTicker.stop()
 			}
 			rf.currentState = follower
-			rf.votedFor = -1
 			rf.timeoutTimer.reset()
 			DPrintf("Server %d is follower.\n", rf.me)
 		case candidate:
@@ -359,7 +318,7 @@ func (rf *Raft) sendRequestVoteToPeers() {
 				} else {
 					if reply.Term > rf.currentTerm {
 						rf.currentTerm = reply.Term
-						rf.transitionToState <- follower
+						rf.transitionToFollower(-1)
 						break
 					}
 				}
@@ -402,7 +361,7 @@ func (rf *Raft) sendHeartbeats() {
 				if reply, e := rf.sendHeartbeatWithTimeout(peer); e == nil {
 					if reply.Term > rf.currentTerm {
 						rf.currentTerm = reply.Term
-						rf.transitionToState <- follower
+						rf.transitionToFollower(-1)
 						break
 					}
 				} else {
