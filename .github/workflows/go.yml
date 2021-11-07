@@ -59,7 +59,7 @@ jobs:
 
     - name: Test Assignment 3-1
       run: | 
-        cd TC4003/assignment3-1
+        cd assignment3-1
         export GOPATH="$PWD"
         cd "$GOPATH/src/raft"
         go test -run Election
