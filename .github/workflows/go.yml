@@ -56,3 +56,12 @@ jobs:
         go mod init chandy_lamport
         go mod tidy
         go test
+
+    - name: Test Assignment 3-1 (elections)
+      run: | 
+        cd assignment3-1/src
+        go mod init main
+        go mod tidy
+        cd raft
+        go test -run InitialElection
+        go test -run ReElection
